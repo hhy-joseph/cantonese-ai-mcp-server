@@ -51,10 +51,10 @@ An **MCP (Model Context Protocol) server** that provides tools for **text-to-spe
 Start the MCP development server using the following command. It will watch for changes in `server.py` and automatically reload.
 
 ```bash
-mcp dev server.py
+uv run mcp dev server.py
 ```
 
-You should see an output indicating that the server has started and is available, typically at `http://127.0.0.1:8000`.
+You should see an output indicating that the server has started and is available, typically at `http://127.0.0.1:6274`.
 
 OR
 
