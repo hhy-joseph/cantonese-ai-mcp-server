@@ -1,135 +1,135 @@
-import os
-import requests
+import httpx
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel, Field
+import os
+from pathlib import Path
+import tempfile
+from typing import Optional
 
-# Initialize the FastMCP server
-mcp = FastMCP("CantoneseAIServer")
+# --- Configuration for the Cantonese-AI APIs ---
+# IMPORTANT: Replace with your actual API key.
+# You can set this as an environment variable named CANTONESE_AI_API_KEY
+API_KEY = os.environ.get("CANTONESE_AI_API_KEY", "YOUR_API_KEY")
 
-# --- Pydantic Models for Tool Input ---
+# Updated URLs based on the provided documentation
+TTS_API_URL = "https://api.cantonese.ai/v1/tts"
+SST_API_URL = "https://paid-api.cantonese.ai" # CORRECTED URL
 
-
-class TextToSpeechInput(BaseModel):
-    """
-    Input model for the text_to_speech tool.
-    Defines the expected arguments and their types.
-    """
-
-    text: str = Field(..., description="The text to be converted to speech.")
-    voice: str = Field(
-        "default", description="The voice to use for the speech synthesis."
-    )
-    language: str = Field(
-        "cantonese",
-        description="The language of the text. Can be 'cantonese' or 'english'.",
-    )
-    output_filename: str = Field(
-        ...,
-        description="The name of the file to save the audio to (e.g., 'output.mp3').",
-    )
-
-
-class SpeechToTextInput(BaseModel):
-    """
-    Input model for the speech_to_text tool.
-    """
-
-    input_filename: str = Field(
-        ...,
-        description="The path to the local audio file to be transcribed (e.g., 'audio.wav').",
-    )
-
-
-# --- Tool Definitions ---
-
+# Create a single MCP server instance for all our Cantonese AI tools
+mcp = FastMCP("cantonese-ai-tools")
 
 @mcp.tool()
-def text_to_speech(input: TextToSpeechInput) -> dict:
+def text_to_speech(
+    text: str,
+    voice_id: Optional[str] = None,
+    speed: Optional[float] = 1,
+    pitch: Optional[int] = 0,
+    output_extension: str = "mp3"
+) -> str:
     """
-    Converts a string of text into an audio file using the cantonese.ai API.
+    Converts Cantonese text to speech using the cantonese.ai API
+    with full customization and saves the audio to a temporary file.
+
+    Args:
+        text: The Cantonese text to be spoken. Maximum 5000 characters.
+        voice_id: Unique identifier for the voice to use.
+        speed: Speech speed multiplier. Range: 0.5-3.0. Defaults to 1.0.
+        pitch: Pitch adjustment in semitones. Range: -12 to +12. Defaults to 0.
+        output_extension: The audio output format. Defaults to "mp3". Options: "mp3", "wav", "ogg", "flac".
+
+    Returns:
+        The file path to the saved audio file.
     """
-    api_key = os.getenv("CANTONESE_AI_API_KEY")
-    if not api_key:
-        return {
-            "success": False,
-            "error": "CANTONESE_AI_API_KEY environment variable not set.",
-        }
-
-    base_url = "https://api.cantonese.ai/v1"
-    endpoint = f"{base_url}/text-to-speech"
-
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-
-    data = {
-        "text": input.text,
-        "voice": input.voice,
-        "language": input.language,
-        "format": "mp3",
-    }
+    if API_KEY == "YOUR_API_KEY":
+        return "Error: API key not set. Please set the CANTONESE_AI_API_KEY environment variable or edit the script."
 
     try:
-        response = requests.post(endpoint, headers=headers, json=data)
+        # Build the request payload according to the documentation
+        payload = {
+            "api_key": API_KEY,
+            "text": text,
+            "output_extension": output_extension,
+            "should_convert_from_simplified_to_traditional":True
+        }
+        # Add optional parameters to the payload only if they are provided
+        if voice_id is not None:
+            payload["voice_id"] = voice_id
+        if speed is not None:
+            payload["speed"] = speed
+        if pitch is not None:
+            payload["pitch"] = pitch
+        
+        with httpx.Client(timeout=60.0) as client:
+            print(f"Sending request to TTS API with payload: {payload}")
+            response = client.post(TTS_API_URL, json=payload)
+            response.raise_for_status()
 
-        if response.status_code == 200:
-            with open(input.output_filename, "wb") as f:
+            # Save the audio to a temporary file with the correct extension
+            temp_dir = tempfile.gettempdir()
+            file_name = f"cantonese_tts_output.{output_extension}"
+            audio_file_path = Path(temp_dir) / file_name
+            with open(audio_file_path, "wb") as f:
                 f.write(response.content)
-            return {
-                "success": True,
-                "message": f"Audio file saved as {input.output_filename}",
-            }
-        else:
-            return {
-                "success": False,
-                "error": f"API Error: {response.status_code} - {response.text}",
-            }
-    except requests.exceptions.RequestException as e:
-        return {"success": False, "error": f"Request failed: {e}"}
+
+            return f"Audio successfully saved to: {audio_file_path}"
+
+    except httpx.RequestError as e:
+        return f"An error occurred while requesting from Cantonese.ai TTS API: {e}"
+    except Exception as e:
+        return f"An unexpected error occurred: {e}"
 
 
 @mcp.tool()
-def speech_to_text(input: SpeechToTextInput) -> dict:
+def speech_to_text(
+    audio_file_path: str,
+    with_timestamp: bool = False,
+    with_diarization: bool = False
+) -> str:
     """
-    Transcribes an audio file into text using the cantonese.ai API.
+    Transcribes Cantonese audio to text using the standard cantonese.ai SST API.
+
+    Args:
+        audio_file_path: The full path to the audio file (e.g., mp3, wav, m4a).
+        with_timestamp: Set to true to include word-level timestamps.
+        with_diarization: Set to true to enable speaker diarization.
+
+    Returns:
+        The transcribed text from the API's JSON response.
     """
-    api_key = os.getenv("CANTONESE_AI_API_KEY")
-    if not api_key:
-        return {
-            "success": False,
-            "error": "CANTONESE_AI_API_KEY environment variable not set.",
-        }
+    if API_KEY == "YOUR_API_KEY":
+        return "Error: API key not set. Please set the CANTONESE_AI_API_KEY environment variable or edit the script."
 
-    if not os.path.exists(input.input_filename):
-        return {
-            "success": False,
-            "error": f"File not found at path: {input.input_filename}",
-        }
-
-    base_url = "https://api.cantonese.ai/v1"
-    endpoint = f"{base_url}/speech-to-text"
-    headers = {"Authorization": f"Bearer {api_key}"}
+    audio_path = Path(audio_file_path)
+    if not audio_path.is_file():
+        return f"Error: The audio file was not found at {audio_file_path}"
 
     try:
-        with open(input.input_filename, "rb") as f:
-            files = {"audio": f}
-            response = requests.post(endpoint, headers=headers, files=files)
-
-        if response.status_code == 200:
-            return {"success": True, "result": response.json()}
-        else:
-            return {
-                "success": False,
-                "error": f"API Error: {response.status_code} - {response.text}",
-            }
-    except FileNotFoundError:
-        return {
-            "success": False,
-            "error": f"File not found at path: {input.input_filename}",
+        # Prepare the multipart/form-data payload according to the new documentation
+        form_data = {
+            "api_key": (None, API_KEY),
+            "with_timestamp": (None, str(with_timestamp).lower()),
+            "with_diarization": (None, str(with_diarization).lower()),
         }
-    except requests.exceptions.RequestException as e:
-        return {"success": False, "error": f"Request failed: {e}"}
+
+        with open(audio_path, "rb") as audio_file:
+            # The audio file must be sent under the field name "data"
+            files = {"data": (audio_path.name, audio_file)}
+            
+            with httpx.Client(timeout=120.0) as client:
+                print(f"Sending request to SST API at {SST_API_URL}")
+                # No separate headers needed, everything is in the multipart form
+                response = client.post(SST_API_URL, data=form_data, files=files)
+                response.raise_for_status()
+
+        # The API returns a JSON object, we return it as a string for Claude to display.
+        return response.text
+
+    except httpx.RequestError as e:
+        return f"An error occurred while requesting from the SST API: {e}"
+    except Exception as e:
+        return f"An unexpected error occurred: {e}"
 
 
-# Run the server
 if __name__ == "__main__":
-    # stdio transport is used for local testing
-    mcp.run(transport="stdio")
+    print("Starting Cantonese AI Tools MCP Server...")
+    print("Available tools: text_to_speech, speech_to_text")
+    mcp.run(transport ="stdio")
